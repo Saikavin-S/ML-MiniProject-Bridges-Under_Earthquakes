@@ -1,0 +1,20 @@
+{
+  "logistic_regression": {
+    "model__C": 1,
+    "model__class_weight": null
+  },
+  "qda": {
+    "model__reg_param": 0.25
+  },
+  "knn": {
+    "model__n_neighbors": 1
+  },
+  "knn_best_k": 1,
+  "cv_f1": {
+    "logistic_regression": 0.9714285714285715,
+    "qda": 1.0,
+    "knn": 0.8414285714285714
+  },
+  "train_rows": 174,
+  "test_rows": 75
+}
