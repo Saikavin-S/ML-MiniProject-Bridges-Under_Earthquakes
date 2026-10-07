@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_validate, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LogisticRegression
@@ -17,6 +17,24 @@ OUT = ROOT / "outputs"
 OUT.mkdir(exist_ok=True)
 FEATURES = ["bridge_age", "magnitude", "distance_km"]
 TARGET = "damage"
+
+def tune_knn(X_train, y_train, k_values=range(1, 16), n_splits=5):
+    """Pick k for KNN using stratified k-fold cross-validation.
+
+    For every candidate k, run n_splits-fold stratified CV on the TRAINING
+    data only (the test set is never touched), score each fold with F1
+    (the classes are imbalanced), and keep the k with the best mean F1.
+    Returns (best_k, results_dataframe).
+    """
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    rows = []
+    for k in k_values:
+        pipe = make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=k))
+        scores = cross_validate(pipe, X_train, y_train, cv=cv, scoring="f1")["test_score"]
+        rows.append({"k": k, "mean_f1": scores.mean(), "std_f1": scores.std()})
+    results = pd.DataFrame(rows)
+    best_k = int(results.loc[results["mean_f1"].idxmax(), "k"])  # first k wins ties
+    return best_k, results
 
 def main():
     if not DATA.exists():
@@ -35,10 +53,22 @@ def main():
         X, y, test_size=0.30, random_state=42, stratify=y
     )
 
+    # KNN hyperparameter tuning: stratified 5-fold CV over k = 1..15, scored on F1.
+    best_k, knn_cv = tune_knn(X_train, y_train)
+    knn_cv.to_csv(OUT/"knn_hyperparameter_tuning.csv", index=False)
+    plt.figure(figsize=(7,4))
+    plt.errorbar(knn_cv["k"], knn_cv["mean_f1"], yerr=knn_cv["std_f1"], marker="o", capsize=4)
+    plt.axvline(best_k, color="red", linestyle="--", alpha=0.6, label=f"best k = {best_k}")
+    plt.xlabel("k (number of neighbors)"); plt.ylabel("Mean F1 (5-fold stratified CV)")
+    plt.title("KNN tuning with cross-validation"); plt.legend()
+    plt.tight_layout(); plt.savefig(OUT/"knn_hyperparameter_tuning.png", dpi=160); plt.close()
+    print(f"KNN tuning (5-fold stratified CV, F1): best k = {best_k}, "
+          f"mean F1 = {knn_cv.loc[knn_cv['k']==best_k,'mean_f1'].iloc[0]:.3f}\n")
+
     models = {
         "Logistic Regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, class_weight=None)),
         "QDA": make_pipeline(StandardScaler(), QuadraticDiscriminantAnalysis(reg_param=0.1)),
-        "KNN (k=5)": make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=5))
+        f"KNN (k={best_k})": make_pipeline(StandardScaler(), KNeighborsClassifier(n_neighbors=best_k))
     }
     rows=[]
     predictions={}
@@ -75,7 +105,7 @@ def main():
         for name, estimator in {
             "Logistic Regression":make_pipeline(StandardScaler(),LogisticRegression(max_iter=2000)),
             "QDA":make_pipeline(StandardScaler(),QuadraticDiscriminantAnalysis(reg_param=0.1)),
-            "KNN (k=5)":make_pipeline(StandardScaler(),KNeighborsClassifier(n_neighbors=5))
+            f"KNN (k={best_k})":make_pipeline(StandardScaler(),KNeighborsClassifier(n_neighbors=best_k))
         }.items():
             estimator.fit(balanced[FEATURES],balanced[TARGET])
             pred=estimator.predict(X_test)
